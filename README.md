@@ -49,5 +49,19 @@ homework runner.
 
 
 ## Homework 1 solution: 
-> to students: please fill your solution description here.
 
+In this homework, I use a LangChain prompt, the required DeepSeek v4 model and a JSON parser to read each receipt. The Deepseek model extracts the payment after rounding and the original item line amounts. Python's Decimal adds the payments for the first answer and the original prices for the second. The second total is equivalent to the subtotal plus all discounts added back, without adding back rounding. For each question, it gets one HKD amount. Both answers passed the public test and same as the ground-truth json you provided.
+
+```mermaid
+flowchart LR
+    A["Receipt images"] --> B["Prompt + DeepSeek vision"]
+    B --> C["JSON parser"]
+    C --> D["Decimal sums"]
+    D --> E["Two HKD answers"]
+    E --> F["results.csv"]
+```
+
+| Ground-truth test | Answer | Result |
+|---|---:|---|
+| Total paid after rounding | HK$1974.30 | correct |
+| Total without discounts | HK$2348.20 | correct |

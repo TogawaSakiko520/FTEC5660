@@ -63,7 +63,66 @@ def build_chain() -> Any:
     ``deepseek-v4-flash-vision-exp``. The API key is loaded from .env.
     """
     ### YOUR CODE HERE
-    return None
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import JsonOutputParser
+    from langchain_deepseek import ChatDeepSeek
+
+    instructions = """
+Extract monetary amounts from the supplied Hong Kong supermarket receipt.
+Return only a JSON object, without Markdown or additional explanation.
+The object must contain these two fields:
+
+amount_paid_after_rounding:
+The final amount paid for this purchase after the ROUNDING adjustment,
+represented as a decimal string. Do not use the subtotal before rounding,
+cash tendered, change, or an account balance. Record the payment only once
+even if it appears in both the purchase summary and payment details.
+
+original_item_amounts:
+An array of decimal strings containing every original positive item line
+amount before discounts. Each entry must represent the total for that line.
+If the printed amount already includes the quantity, do not multiply it again.
+Only multiply by the quantity when the printed amount is explicitly a unit
+price. Preserve separate item lines even when their descriptions or amounts
+are identical.
+
+Do not subtract promotions, coupons, member discounts, app discounts,
+packaging-damage discounts, or percentage discounts from the original item
+amounts. Do not include discount lines or ROUNDING as items. Exclude subtotals,
+totals, payments, change, balances, loyalty points, and identification numbers
+from the item array.
+
+Use decimal strings with exactly two decimal places, without currency symbols
+or thousands separators. If a required amount cannot be read, use null rather
+than guessing or substituting zero.
+"""
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", instructions),
+            (
+                "human",
+                [
+                    {
+                        "type": "text",
+                        "text": "Read this receipt and return the required JSON object.",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "{image_url}"},
+                    },
+                ],
+            ),
+        ]
+    )
+
+    model = ChatDeepSeek(
+        model="deepseek-v4-flash-vision-exp",
+        timeout=120,
+        max_retries=2,
+    )
+
+    return prompt | model | JsonOutputParser()
 
 
 def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
@@ -79,8 +138,52 @@ def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
     to process independent receipt-extraction prompts in parallel.
     """
     ### YOUR CODE HERE
-    _ = (chain, images)
-    return {QUERY_1: DUMMY_RESPONSE, QUERY_2: DUMMY_RESPONSE}
+    def as_money(value: Any) -> Decimal:
+        if not isinstance(value, str):
+            raise ValueError("Expected a decimal string.")
+
+        amount = Decimal(value)
+
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("Expected a finite non-negative amount.")
+
+        return amount
+
+    inputs = [
+        {"image_url": image_data_url(path)}
+        for path in images
+    ]
+
+    receipts = chain.batch(
+        inputs,
+        config={"max_concurrency": 3},
+    )
+
+    total_paid = Decimal("0")
+    total_original = Decimal("0")
+
+    for path, receipt in zip(images, receipts):
+        if not isinstance(receipt, dict):
+            raise ValueError(f"Invalid receipt result: {path.name}")
+
+        items = receipt.get("original_item_amounts")
+
+        if not isinstance(items, list) or not items:
+            raise ValueError(f"Missing original item amounts: {path.name}")
+
+        total_paid += as_money(
+            receipt.get("amount_paid_after_rounding")
+        )
+
+        total_original += sum(
+            (as_money(value) for value in items),
+            Decimal("0"),
+        )
+
+    return {
+        QUERY_1: f"HK${total_paid:.2f}",
+        QUERY_2: f"HK${total_original:.2f}",
+    }
 
 
 # Everything below is provided runner/scoring code. No edits are needed.
